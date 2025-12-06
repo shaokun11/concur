@@ -198,18 +198,34 @@ func (r *Runner[R]) FirstError(tasks []func(context.Context) (R, error)) TaskRes
 }
 
 // All runs all tasks and returns their results in the original order,
-// but only if every task succeeds. If any task fails, returns the first error encountered.
+// but only if every task succeeds. If any task fails, returns the first error encountered
+// and cancels remaining tasks.
 //
 // This is similar to errgroup.Group behavior: fail-fast semantics with ordered results.
 // For collecting both successes and failures, use AllSettled instead.
 func (r *Runner[R]) All(tasks []func(context.Context) (R, error)) ([]R, error) {
-	results := r.AllSettled(tasks)
-	out := make([]R, len(results))
-	for _, res := range results {
+	if len(tasks) == 0 {
+		return nil, ErrEmptyTasks
+	}
+	ch := r.run(tasks)
+	results := make([]TaskResult[R], len(tasks))
+	received := 0
+
+	for res := range ch {
 		if res.Err != nil {
-			return nil, res.Err // Consider wrapping: fmt.Errorf("task %d: %w", res.Index, res.Err)
+			r.Stop()
+			return nil, res.Err
 		}
-		out[res.Index] = res.Result
+		results[res.Index] = res
+		received++
+		if received == len(tasks) {
+			break
+		}
+	}
+
+	out := make([]R, len(results))
+	for i, res := range results {
+		out[i] = res.Result
 	}
 	return out, nil
 }
